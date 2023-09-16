@@ -57,6 +57,7 @@ USERNAME=
 PASSWORD=
 TIMESPAN=
 IPFAMILY=
+CHECK=
 
 # --------------------------------------------
 # Functions
@@ -71,6 +72,7 @@ Input()
 			'-u') shift; USERNAME=$1;;
 			'-p') shift; PASSWORD=$1;;
 			'-t') shift; TIMESPAN=$1;;
+			'-c') CHECK=$1;;
 			'-'[46]|'-6or4') IPFAMILY=$1;;
 			'apply') COMMAND=$1; shift; PROVIDER=$1;;
 			'remove') COMMAND=$1;;
@@ -84,7 +86,7 @@ Input()
 Read()
 {
 	[[ -f '/var/lib/dietpi/dietpi-ddns/update.sh' ]] || return
-	local command=$(tail -1 /var/lib/dietpi/dietpi-ddns/update.sh)
+	local command=$(grep '^curl -sSfL' /var/lib/dietpi/dietpi-ddns/update.sh)
 
 	# DuckDNS
 	if [[ $command == *'duckdns.org'* ]]
@@ -141,6 +143,10 @@ Read()
 	[[ ! $TIMESPAN && -f '/var/spool/cron/crontabs/dietpi-ddns' ]] || return
 	TIMESPAN=$(tail -1 /var/spool/cron/crontabs/dietpi-ddns)
 	TIMESPAN=${TIMESPAN#\*/} TIMESPAN=${TIMESPAN%% *}
+
+	# IP Check
+	# Checks if ifconfig.me is mentioned in the update file
+	CHECK=[[ $(grep -q "ifconfig.me" /var/lib/dietpi/dietpi-ddns/update.sh) ]]
 }
 
 # Apply chosen settings and create a Cron job for dynamic DNS updates
@@ -246,7 +252,17 @@ Apply()
 	G_EXEC chown dietpi-ddns:dietpi-ddns /var/lib/dietpi/dietpi-ddns/update.sh
 	# Shellcheck false positive: https://github.com/koalaman/shellcheck/issues/2168
 	# shellcheck disable=SC2016
+	if [[ $CHECK ]]
+	then
+		echo "lastipfile='/var/tmp/extip'" >> /var/lib/dietpi/dietpi-ddns/update.sh
+		echo "extip=\$(curl -s ifconfig.me | sed -n -e 's/\([0-9.]*\)/\1/p')" >> /var/lib/dietpi/dietpi-ddns/update.sh
+		echo "lastip=\$(cat '\$lastipfile' 2>/dev/null) ||  lastip='0.0.0.0'" >> /var/lib/dietpi/dietpi-ddns/update.sh
+		echo "[ '\$lastip' = '\$extip' ] || \" >> /var/lib/dietpi/dietpi-ddns/update.sh
+	fi
 	echo "curl${ipfamily:+ $ipfamily} -sSfL${http_auth:+ -u '$USERNAME:$PASSWORD'} '$url' 2>&1 > /dev/null | logger -t dietpi-ddns -p 3" >> /var/lib/dietpi/dietpi-ddns/update.sh
+	if [[ $CHECK ]]
+		echo "echo '\$extip' > '\$lastipfile'" >> /var/lib/dietpi/dietpi-ddns/update.sh
+	fi
 
 	# Apply Cron job
 	G_DIETPI-NOTIFY 2 'Applying DietPi-DDNS Cron job...'
